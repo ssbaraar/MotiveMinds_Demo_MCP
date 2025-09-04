@@ -1,0 +1,4 @@
+Specified swagger has the following errors: 'Definition is not valid.  Error: 'Error : paths/~1mcp#searchProductByDescription : The path is not valid, it must not contain a query part or fragment identifier. To include '?' or '#' characters in the path, they must be URL encoded.
+   ##   Error : paths/~1mcp#generic_sap_search : The path is not valid, it must not contain a query part or fragment identifier. To include '?' or '#' characters in the path, they must be URL encoded.
+   ##   Error : paths/~1mcp#post_to_sap : The path is not valid, it must not contain a query part or fragment identifier. To include '?' or '#' characters in the path, they must be URL encoded.
+'

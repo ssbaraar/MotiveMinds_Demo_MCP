@@ -1,0 +1,156 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Motiveminds MCP Server",
+    "description": "Streamable HTTP MCP endpoint exposing SAP tools via JSON-RPC. Use the 'method' field to select a tool.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://3aef79c87445.ngrok-free.app"
+    }
+  ],
+  "paths": {
+    "/mcp": {
+      "post": {
+        "summary": "Call MCP endpoint",
+        "description": "Send a JSON-RPC request to invoke an MCP tool (e.g., tools/searchCustomerByCustomerDescription).",
+        "operationId": "callMcp",
+        "parameters": [
+          {
+            "name": "Accept",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": ["text/event-stream"]
+            },
+            "example": "text/event-stream",
+            "description": "MUST be 'text/event-stream' for MCP Streamable HTTP."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["jsonrpc", "id", "method", "params"],
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "example": "2.0"
+                  },
+                  "id": {
+                    "oneOf": [
+                      { "type": "string" },
+                      { "type": "integer" }
+                    ],
+                    "example": "1"
+                  },
+                  "method": {
+                    "type": "string",
+                    "description": "Fully qualified MCP method name, e.g., tools/searchCustomerByCustomerDescription",
+                    "example": "tools/searchCustomerByCustomerDescription"
+                  },
+                  "params": {
+                    "type": "object",
+                    "description": "Parameters for the chosen tool. See examples."
+                  }
+                }
+              },
+              "examples": {
+                "searchCustomerByCustomerDescription": {
+                  "summary": "Tools: searchCustomerByCustomerDescription",
+                  "value": {
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "method": "tools/searchCustomerByCustomerDescription",
+                    "params": {
+                      "description": "Acme",
+                      "search_field": "CustomerName",
+                      "exact_match": false,
+                      "max_results": 5
+                    }
+                  }
+                },
+                "searchProductByDescription": {
+                  "summary": "Tools: searchProductByDescription (search mode)",
+                  "value": {
+                    "jsonrpc": "2.0",
+                    "id": "2",
+                    "method": "tools/searchProductByDescription",
+                    "params": {
+                      "description": "Widget",
+                      "search_field": "ProductDescription",
+                      "language": "EN",
+                      "exact_match": false,
+                      "max_results": 5
+                    }
+                  }
+                },
+                "searchProductByDescription_keyMode": {
+                  "summary": "Tools: searchProductByDescription (direct key mode)",
+                  "value": {
+                    "jsonrpc": "2.0",
+                    "id": "2b",
+                    "method": "tools/searchProductByDescription",
+                    "params": {
+                      "product": "12345",
+                      "language": "EN",
+                      "key_mode": "auto"
+                    }
+                  }
+                },
+                "generic_sap_search": {
+                  "summary": "Tools: generic_sap_search",
+                  "value": {
+                    "jsonrpc": "2.0",
+                    "id": "3",
+                    "method": "tools/generic_sap_search",
+                    "params": {
+                      "service_path": "sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder",
+                      "method": "GET",
+                      "params": { "$top": 3 }
+                    }
+                  }
+                },
+                "post_to_sap": {
+                  "summary": "Tools: post_to_sap",
+                  "value": {
+                    "jsonrpc": "2.0",
+                    "id": "4",
+                    "method": "tools/post_to_sap",
+                    "params": {
+                      "endpoint": "API_SALES_ORDER_SRV/A_SalesOrder",
+                      "payload": "{ \"OrderID\": \"12345\" }",
+                      "content_type": "application/json"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP tool response (JSON-RPC result or error).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Client error"
+          },
+          "5XX": {
+            "description": "Server error"
+          }
+        }
+      }
+    }
+  }
+}
