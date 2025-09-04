@@ -22,8 +22,7 @@ ssl_context = ssl._create_unverified_context()
 # ---------- MCP server ----------
 mcp = FastMCP(
     "MotivemindsMCPServer",
-    stateless_http=True,
-    log_level="INFO",
+    log_level="DEBUG", # Changed to DEBUG for more verbose logging
 )
 
 # ---------- SAP config ----------
@@ -257,8 +256,8 @@ def post_to_sap(
     additional_headers: Optional[Dict[str, str]] = None,
 ) -> str:
     """Dedicated POST to SAP (or any endpoint)."""
+    url = endpoint if endpoint.startswith("http") else f"https://vhcals4hci.dummy.nodomain:44300/sap/opu/odata/sap/{endpoint.lstrip('/')}"
     try:
-        url = endpoint if endpoint.startswith("http") else f"https://vhcals4hci.dummy.nodomain:44300/sap/opu/odata/sap/{endpoint.lstrip('/')}"
         req = urllib.request.Request(url, data=(payload.encode("utf-8") if payload else None), method="POST")
         req.add_header("Content-Type", content_type)
         req.add_header("Accept", "application/json")
@@ -304,13 +303,16 @@ def greet_user(name: str, style: str = "friendly") -> str:
     return f"{styles.get(style, styles['friendly'])} for someone named {name}."
 
 # ---------- ASGI entrypoint (Streamable HTTP on /mcp) ----------
-# NOTE: Your FastMCP version exposes Streamable HTTP via streamable_http_app() (older versions).
+# Using streamable_http_app() for Microsoft Copilot Studio compatibility
+logger.info("Attempting to create Streamable HTTP ASGI application for Copilot Studio...")
 app = mcp.streamable_http_app()   # mounted at /mcp by default
+logger.info("Streamable HTTP ASGI application created. MCP Server ready for Microsoft Copilot Studio integration")
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting Motiveminds MCP Server on http://0.0.0.0:8000/mcp ...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    logger.info("Initiating Uvicorn server startup for MotiveMinds MCP Server on http://0.0.0.0:8000/mcp ...")
+    logger.info("Server configured for Microsoft Copilot Studio Streamable HTTP transport")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="debug") # Changed to DEBUG for more verbose logging
 
 # # --- Entry point ---
 # if __name__ == "__main__":
