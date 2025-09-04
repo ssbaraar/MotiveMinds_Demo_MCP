@@ -2,6 +2,7 @@ import os
 import logging
 import urllib.request
 import urllib.parse
+import urllib.error
 import base64
 import ssl
 import json
@@ -19,7 +20,11 @@ logger = logging.getLogger("MotivemindsMCP")
 ssl_context = ssl._create_unverified_context()
 
 # ---------- MCP server ----------
-mcp = FastMCP("MotivemindsMCPServer")
+mcp = FastMCP(
+    "MotivemindsMCPServer",
+    stateless_http=True,
+    log_level="INFO",
+)
 
 # ---------- SAP config ----------
 SAP_HOST      = os.getenv("SAP_HOST")              # e.g. "https://sap.example.com"
