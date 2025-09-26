@@ -6,315 +6,804 @@ import urllib.error
 import base64
 import ssl
 import json
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
-# ---------- env & logging ----------
+# ---------- Environment & Logging ----------
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MotivemindsMCP")
 
-# ---------- SSL (sandbox only) ----------
-ssl_context = ssl._create_unverified_context()
+# ---------- Configuration Validation ----------
+def validate_environment():
+    """Validate required environment variables at startup"""
+    required_vars = ["SAP_HOST", "AUTH_USERNAME", "AUTH_PASSWORD"]
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+    
+    # Validate SAP_HOST format
+    sap_host = os.getenv("SAP_HOST")
+    if not sap_host or not sap_host.startswith(("http://", "https://")):
+        raise ValueError("SAP_HOST must include protocol (http:// or https://)")
+    
+    logger.info("Environment validation passed")
 
-# ---------- MCP server ----------
-mcp = FastMCP(
-    "MotivemindsMCPServer",
-    log_level="DEBUG", # Changed to DEBUG for more verbose logging
-)
+# Validate environment on startup
+validate_environment()
 
-# ---------- SAP config ----------
-SAP_HOST      = os.getenv("SAP_HOST")              # e.g. "https://sap.example.com"
-SAP_PORT      = os.getenv("SAP_PORT", "443")
-SAP_CLIENT    = os.getenv("SAP_CLIENT", "100")
-AUTH_USERNAME = os.getenv("AUTH_USERNAME")
-AUTH_PASSWORD = os.getenv("AUTH_PASSWORD")
+# ---------- SSL Configuration ----------
+# For production, use proper SSL context with certificate verification
+# Only disable SSL verification for development/testing environments
+if os.getenv("ENVIRONMENT", "production").lower() == "development":
+    ssl_context = ssl._create_unverified_context()
+    logger.warning("SSL verification disabled - DEVELOPMENT MODE ONLY")
+else:
+    ssl_context = ssl.create_default_context()
+    logger.info("SSL verification enabled")
+
+# ---------- MCP Server ----------
+mcp = FastMCP("MotivemindsMCPServer")
+
+# ---------- SAP Configuration ----------
+SAP_HOST = os.getenv("SAP_HOST")
+SAP_PORT = os.getenv("SAP_PORT", "443")
+SAP_CLIENT = os.getenv("SAP_CLIENT", "100")
+auth_username = os.getenv("AUTH_USERNAME")
+auth_password = os.getenv("AUTH_PASSWORD")
 
 SAP_SERVICES = {
     "business_partner": "sap/opu/odata/sap/API_BUSINESS_PARTNER/A_Customer",
     "product_description": "/sap/opu/odata4/sap/api_product/srvd_a2x/sap/product/0001/ProductDescription",
     "sales_order": "sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder",
+    "material_stock": "sap/opu/odata/sap/API_MATERIAL_STOCK_SRV/A_MatlStkInAcctMod",
 }
 
 def get_sap_base_url(service_path: str) -> str:
+    """
+    Builds the full base SAP URL using the service path provided by the caller.
+    Handles port configuration properly to avoid malformed URLs.
+    """
+    if not service_path:
+        raise ValueError("Service path must be provided.")
     if not SAP_HOST:
         raise ValueError("SAP_HOST must be set (e.g. https://<host>).")
     if not SAP_CLIENT:
         raise ValueError("SAP_CLIENT must be set (e.g. 100).")
-    sp = (service_path or "").lstrip("/")
-    return f"{SAP_HOST}:{SAP_PORT}/{sp}?sap-client={SAP_CLIENT}"
+    
+    # Parse the host to check if port is already included
+    parsed_host = urlparse(SAP_HOST)
+    
+    # If port is already in the host, don't add it again
+    if parsed_host.port:
+        base_host = SAP_HOST
+    else:
+        # Only add port if it's not the default port for the scheme
+        if (parsed_host.scheme == "https" and SAP_PORT != "443") or (parsed_host.scheme == "http" and SAP_PORT != "80"):
+            base_host = f"{SAP_HOST}:{SAP_PORT}"
+        else:
+            base_host = SAP_HOST
+    
+    service_path = service_path.lstrip("/")
+    return f"{base_host}/{service_path}?sap-client={SAP_CLIENT}"
 
-def _auth(req: urllib.request.Request) -> None:
-    if AUTH_USERNAME and AUTH_PASSWORD:
-        creds = f"{AUTH_USERNAME}:{AUTH_PASSWORD}"
-        token = base64.b64encode(creds.encode()).decode()
-        req.add_header("Authorization", f"Basic {token}")
+def escape_odata_string(value: str) -> str:
+    """Escape single quotes in OData string values to prevent injection"""
+    return value.replace("'", "''")
+
+def build_url_with_params(base_url: str, params: Dict[str, Any]) -> str:
+    """Build URL with query parameters, handling existing parameters correctly"""
+    if not params:
+        return base_url
+    
+    # Check if base_url already has query parameters
+    separator = "&" if "?" in base_url else "?"
+    query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+    return f"{base_url}{separator}{query_string}"
+
+def make_sap_request(url: str, method: str = "GET", data: Optional[str] = None, 
+                    headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> Dict[str, Any]:
+    """Make a standardized SAP request with proper error handling"""
+    try:
+        req = urllib.request.Request(
+            url, 
+            data=(data.encode("utf-8") if data else None), 
+            method=method.upper()
+        )
+        
+        # Set default headers
+        default_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        
+        # Merge with additional headers
+        if headers:
+            default_headers.update(headers)
+        
+        for key, value in default_headers.items():
+            req.add_header(key, value)
+        
+        # Add authentication
+        if auth_username and auth_password:
+            credentials = f"{auth_username}:{auth_password}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode("utf-8")
+            req.add_header("Authorization", f"Basic {encoded_credentials}")
+        
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context) as resp:
+            response_data = resp.read().decode("utf-8")
+            return {
+                "success": True,
+                "status_code": resp.getcode(),
+                "data": json.loads(response_data) if response_data else None,
+                "url": url
+            }
+            
+    except urllib.error.HTTPError as e:
+        error_details = e.read().decode("utf-8") if e.fp else "No error details"
+        return {
+            "success": False,
+            "status_code": e.code,
+            "error": f"HTTP Error {e.code}: {e.reason}",
+            "details": error_details,
+            "url": url
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "status_code": 500,
+            "error": f"Request failed: {str(e)}",
+            "url": url
+        }
 
 # ---------- TOOLS ----------
 
 @mcp.tool()
-def searchCustomerByCustomerDescription(
+def search_CustomerBy_CustomerDescription(
     description: str,
     search_field: str = "CustomerName",
     exact_match: bool = False,
     max_results: int = 10,
     base_url: Optional[str] = None,
 ) -> str:
-    """Search customer numbers by description using SAP Business Partner API (OData v2)."""
+    """
+    Search customer numbers by customer description using SAP Business Partner API.
+    
+    Args:
+        description: Customer description to search for
+        search_field: Field to search in (CustomerName, CustomerFullName, etc.)
+        exact_match: If True, searches for exact match; if False, uses contains
+        max_results: Maximum number of results to return
+        base_url: The SAP Business Partner API endpoint
+        
+    Returns:
+        JSON response with customer data or error message.
+        Never returns credentials (userid/password) or sensitive information.
+    """
     try:
-        base = base_url or get_sap_base_url(SAP_SERVICES["business_partner"])
-        filter_query = (
-            f"{search_field} eq '{description}'"
-            if exact_match else
-            f"substringof('{description}', {search_field}) eq true"
-        )
-        params = {"$filter": filter_query, "$select": "Customer,CustomerName,CustomerFullName", "$top": max_results}
-        url = f"{base}&{urllib.parse.urlencode(params, quote_via=urllib.parse.quote)}"
+        # Use default base URL if none is provided
+        if not base_url:
+            service_path = SAP_SERVICES["business_partner"]
+            base_url = get_sap_base_url(service_path)
 
-        req = urllib.request.Request(url, method="GET")
-        req.add_header("Accept", "application/json")
-        req.add_header("Content-Type", "application/json")
-        _auth(req)
+        # Escape the description to prevent OData injection
+        escaped_description = escape_odata_string(description)
+        
+        # Build OData filter based on search type
+        if exact_match:
+            filter_query = f"{search_field} eq '{escaped_description}'"
+        else:
+            # Use substringof for partial matching (OData V2)
+            filter_query = f"substringof('{escaped_description}', {search_field}) eq true"
 
-        with urllib.request.urlopen(req, timeout=30, context=ssl_context) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-
-        if "d" in payload and "results" in payload["d"]:
-            customers = payload["d"]["results"]
+        # Build query parameters
+        query_params = {
+            "$filter": filter_query,
+            "$select": "Customer,CustomerName,CustomerFullName",
+            "$top": max_results
+        }
+        
+        url = build_url_with_params(base_url, query_params)
+        result = make_sap_request(url)
+        
+        if not result["success"]:
             return json.dumps({
+                "error": result["error"],
+                "details": result.get("details", ""),
+                "status_code": result["status_code"]
+            }, indent=2)
+        
+        data = result["data"]
+        if "d" in data and "results" in data["d"]:
+            customers = data["d"]["results"]
+            response = {
                 "search_query": description,
                 "search_field": search_field,
                 "exact_match": exact_match,
                 "found_customers": len(customers),
                 "customers": [
                     {
-                        "Customer": c.get("Customer", ""),
-                        "CustomerName": c.get("CustomerName", ""),
-                        "CustomerFullName": c.get("CustomerFullName", ""),
-                    } for c in customers
-                ],
+                        "Customer": customer.get("Customer", ""),
+                        "CustomerName": customer.get("CustomerName", ""),
+                        "CustomerFullName": customer.get("CustomerFullName", "")
+                    }
+                    for customer in customers
+                ]
+            }
+            return json.dumps(response, indent=2)
+        else:
+            return json.dumps({
+                "message": f"No customers found matching: '{description}'",
+                "search_query": description,
+                "found_customers": 0
             }, indent=2)
 
-        return f"No customers found matching: '{description}'"
-    except urllib.error.HTTPError as e:
-        details = e.read().decode("utf-8") if e.fp else "No error details"
-        return f"HTTP Error {e.code}: {e.reason}\nDetails: {details}"
     except Exception as e:
-        return f"API call failed: {str(e)}"
+        logger.error(f"Error in search_CustomerBy_CustomerDescription: {str(e)}")
+        return json.dumps({
+            "error": f"Unexpected error: {str(e)}",
+            "search_query": description
+        }, indent=2)
 
 @mcp.tool()
-def searchProductByDescription(
+def search_ProductBy_Description(
     description: Optional[str] = None,
     search_field: str = "ProductDescription",
     language: str = "EN",
     exact_match: bool = False,
     max_results: int = 10,
     product: Optional[str] = None,
-    key_mode: str = "auto",          # 'segment' | 'paren' | 'auto'
+    key_mode: str = "auto",
     service_version: str = "0002",
     base_url: Optional[str] = None,
 ) -> str:
-    """Search (OData v4) or fetch a single ProductDescription by keys."""
+    """
+    Search product numbers by product description (OData V4) and/or fetch a single
+    ProductDescription by keys using key-as-segment or parentheses key syntax.
+
+    Modes:
+      1) Search mode (contains/eq): provide 'description' (product=None)
+      2) Direct key mode: provide 'product' (description optional/ignored)
+         - key_mode='segment'  -> .../ProductDescription/<Product>/<Language>
+         - key_mode='paren'    -> .../ProductDescription(Product='<P>',Language='<L>')
+         - key_mode='auto'     -> try segment, then paren
+         
+    Args:
+        description: Product description to search for (for search mode)
+        search_field: Field to search in
+        language: Language code for product descriptions
+        exact_match: Whether to perform exact match or contains search
+        max_results: Maximum number of results to return
+        product: Product ID for direct lookup (for key mode)
+        key_mode: Key access mode ('segment', 'paren', 'auto')
+        service_version: Service version to use
+        base_url: Optional custom base URL
+        
+    Returns:
+        JSON with normalized structure.
+    """
     try:
         def get_service_base_path(version: str) -> str:
             return f"/sap/opu/odata4/sap/api_product/srvd_a2x/sap/product/{version}/ProductDescription"
-
-        def append_query(url: str, params: dict) -> str:
-            qp = {k: v for k, v in params.items() if v is not None}
-            if not qp: return url
-            sep = "&" if "?" in url else "?"
-            return f"{url}{sep}{urllib.parse.urlencode(qp, quote_via=urllib.parse.quote)}"
 
         def build_base_url() -> str:
             sp = get_service_base_path(service_version)
             return base_url or get_sap_base_url(sp)
 
-        def make_request(url: str):
-            req = urllib.request.Request(url, method="GET")
-            req.add_header("Accept", "application/json")
-            req.add_header("Content-Type", "application/json")
-            _auth(req)
-            return urllib.request.urlopen(req, timeout=30, context=ssl_context)
-
         base = build_base_url()
 
+        # Direct key fetch mode
         if product:
+            escaped_product = escape_odata_string(product)
+            escaped_language = escape_odata_string(language)
+            
+            # Build candidates based on key_mode
             candidates = []
             if key_mode in ("segment", "auto"):
-                seg = base.rstrip("/") + "/" + urllib.parse.quote(product, safe="") + "/" + urllib.parse.quote(language, safe="")
-                seg = append_query(seg, {"$select": "Product,ProductDescription,Language"})
+                seg = (
+                    base.rstrip("/")
+                    + "/"
+                    + urllib.parse.quote(escaped_product, safe="")
+                    + "/"
+                    + urllib.parse.quote(escaped_language, safe="")
+                )
+                seg = build_url_with_params(seg, {"$select": "Product,ProductDescription,Language"})
                 candidates.append(("segment", seg))
+
             if key_mode in ("paren", "auto"):
-                paren = base.rstrip("/") + f"(Product='{product}',Language='{language}')"
-                paren = append_query(paren, {"$select": "Product,ProductDescription,Language"})
+                paren_key = f"(Product='{escaped_product}',Language='{escaped_language}')"
+                paren = base.rstrip("/") + paren_key
+                paren = build_url_with_params(paren, {"$select": "Product,ProductDescription,Language"})
                 candidates.append(("paren", paren))
 
             last_err = None
             for mode, url in candidates:
-                try:
-                    with make_request(url) as resp:
-                        body = json.loads(resp.read().decode("utf-8"))
-                        if isinstance(body, dict) and "Product" in body:
-                            items = [body]
-                        elif isinstance(body, dict) and "value" in body:
-                            items = body["value"] if isinstance(body["value"], list) else [body["value"]]
-                        else:
-                            items = []
-                        result = {
+                result = make_sap_request(url)
+                
+                if result["success"]:
+                    data = result["data"]
+                    # Single-entity: often a plain object; some gateways still wrap in "value"
+                    if isinstance(data, dict) and "Product" in data:
+                        products = [data]
+                    elif isinstance(data, dict) and "value" in data:
+                        products = data["value"] if isinstance(data["value"], list) else [data["value"]]
+                    else:
+                        products = []
+
+                    response = {
+                        "mode": f"key_{mode}",
+                        "product_key": product,
+                        "language": language,
+                        "found_products": len(products),
+                        "products": [
+                            {
+                                "Product": p.get("Product", ""),
+                                "ProductDescription": p.get("ProductDescription", ""),
+                                "Language": p.get("Language", ""),
+                            }
+                            for p in products
+                        ],
+                    }
+                    if response["found_products"] == 0:
+                        response["message"] = f"No ProductDescription found for {product}/{language}"
+                    return json.dumps(response, indent=2)
+                else:
+                    last_err = result["error"]
+                    if key_mode != "auto" or result["status_code"] not in (400, 404):
+                        return json.dumps({
+                            "error": result["error"],
+                            "details": result.get("details", ""),
                             "mode": f"key_{mode}",
                             "product_key": product,
-                            "language": language,
-                            "found_products": len(items),
-                            "products": [
-                                {
-                                    "Product": p.get("Product", ""),
-                                    "ProductDescription": p.get("ProductDescription", ""),
-                                    "Language": p.get("Language", ""),
-                                } for p in items
-                            ],
-                        }
-                        return json.dumps(result, indent=2) if items else json.dumps(
-                            {"message": f"No ProductDescription found for {product}/{language}", **result}, indent=2
-                        )
-                except urllib.error.HTTPError as e:
-                    last_err = f"HTTP Error {e.code}: {e.reason}\nURL: {url}\nDetails: {(e.read().decode('utf-8') if e.fp else 'No details')}"
-                    if key_mode != "auto" or e.code not in (400, 404):
-                        return last_err
-                except Exception as e:
-                    last_err = f"API call failed: {str(e)}"
-                    if key_mode != "auto":
-                        return last_err
-            return last_err or f"ProductDescription not found for {product}/{language}"
-
-        if not description:
-            return "Provide either 'description' (search) or 'product' (direct key)."
-
-        filter_query = (
-            f"{search_field} eq '{description}' and Language eq '{language}'"
-            if exact_match else
-            f"contains({search_field}, '{description}') and Language eq '{language}'"
-        )
-        url = append_query(base, {"$filter": filter_query, "$select": "Product,ProductDescription,Language", "$top": max_results})
-
-        with make_request(url) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        if isinstance(body, dict) and "value" in body:
-            items = body["value"]
+                            "language": language
+                        }, indent=2)
+            
             return json.dumps({
+                "error": last_err or f"ProductDescription not found for {product}/{language}",
+                "product_key": product,
+                "language": language
+            }, indent=2)
+
+        # Search mode
+        if not description:
+            return json.dumps({
+                "error": "Please provide either a 'description' for search mode, or a 'product' for direct key mode."
+            }, indent=2)
+
+        escaped_description = escape_odata_string(description)
+        escaped_language = escape_odata_string(language)
+        
+        # Build OData V4 filter
+        if exact_match:
+            filter_query = f"{search_field} eq '{escaped_description}' and Language eq '{escaped_language}'"
+        else:
+            filter_query = f"contains({search_field}, '{escaped_description}') and Language eq '{escaped_language}'"
+
+        query_params = {
+            "$filter": filter_query,
+            "$select": "Product,ProductDescription,Language",
+            "$top": max_results,
+        }
+
+        url = build_url_with_params(base, query_params)
+        result = make_sap_request(url)
+        
+        if not result["success"]:
+            return json.dumps({
+                "error": result["error"],
+                "details": result.get("details", ""),
+                "mode": "search",
+                "search_query": description
+            }, indent=2)
+        
+        data = result["data"]
+        if isinstance(data, dict) and "value" in data:
+            products = data["value"]
+            response = {
                 "mode": "search",
                 "search_query": description,
                 "search_field": search_field,
                 "language": language,
                 "exact_match": exact_match,
-                "found_products": len(items),
+                "found_products": len(products),
                 "products": [
                     {
                         "Product": p.get("Product", ""),
                         "ProductDescription": p.get("ProductDescription", ""),
                         "Language": p.get("Language", ""),
-                    } for p in items
+                    }
+                    for p in products
                 ],
+            }
+            return json.dumps(response, indent=2)
+        else:
+            return json.dumps({
+                "message": f"No products found matching: '{description}' (lang={language})",
+                "mode": "search",
+                "search_query": description,
+                "found_products": 0
             }, indent=2)
-        return f"No products found matching: '{description}' (lang={language})"
-    except urllib.error.HTTPError as e:
-        details = e.read().decode("utf-8") if e.fp else "No error details"
-        return f"HTTP Error {e.code}: {e.reason}\nDetails: {details}"
+
     except Exception as e:
-        return f"API call failed: {str(e)}"
+        logger.error(f"Error in search_ProductBy_Description: {str(e)}")
+        return json.dumps({
+            "error": f"Unexpected error: {str(e)}",
+            "search_query": description or "",
+            "product_key": product or ""
+        }, indent=2)
 
 @mcp.tool()
-def generic_sap_search(
+def get_Material_Stock(
+    material: str,
+    plant: Optional[str] = None,
+    storage_location: Optional[str] = None,
+    max_results: int = 10,
+    base_url: Optional[str] = None,
+) -> str:
+    """
+    Get stock details for a given material using SAP Material Stock API.
+
+    Args:
+        material: The material number to check stock for
+        plant: Optional plant ID to filter
+        storage_location: Optional storage location to filter
+        max_results: Maximum number of results to return
+        base_url: Override the default SAP OData base URL if needed
+
+    Returns:
+        JSON response with stock data or error message.
+    """
+    try:
+        # Use default service if base_url not provided
+        if not base_url:
+            service_path = SAP_SERVICES["material_stock"]
+            base_url = get_sap_base_url(service_path)
+
+        # Build OData filter with proper escaping
+        escaped_material = escape_odata_string(material)
+        filters = [f"Material eq '{escaped_material}'"]
+        
+        if plant:
+            escaped_plant = escape_odata_string(plant)
+            filters.append(f"Plant eq '{escaped_plant}'")
+        if storage_location:
+            escaped_location = escape_odata_string(storage_location)
+            filters.append(f"StorageLocation eq '{escaped_location}'")
+
+        filter_query = " and ".join(filters)
+
+        query_params = {
+            "$filter": filter_query,
+            "$select": "Material,Plant,StorageLocation,MaterialBaseUnit,InventoryStockType,Batch,Supplier",
+            "$top": max_results
+        }
+
+        url = build_url_with_params(base_url, query_params)
+        result = make_sap_request(url)
+        
+        if not result["success"]:
+            return json.dumps({
+                "error": result["error"],
+                "details": result.get("details", ""),
+                "status_code": result["status_code"]
+            }, indent=2)
+        
+        data = result["data"]
+        if "d" in data and "results" in data["d"]:
+            stocks = data["d"]["results"]
+            response = {
+                "material": material,
+                "plant": plant,
+                "storage_location": storage_location,
+                "found_records": len(stocks),
+                "stocks": stocks
+            }
+            return json.dumps(response, indent=2)
+        else:
+            return json.dumps({
+                "message": f"No stock found for Material '{material}'",
+                "material": material,
+                "found_records": 0
+            }, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error in get_Material_Stock: {str(e)}")
+        return json.dumps({
+            "error": f"Unexpected error: {str(e)}",
+            "material": material
+        }, indent=2)
+
+@mcp.tool()
+def Looking_into_SAP(
     service_path: str,
     method: str = "GET",
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, str]] = None,
     data: Optional[str] = None,
 ) -> str:
-    """Generic SAP OData call (V2/V4)."""
+    """
+    Generic SAP OData search/call tool (V2 or V4).
+
+    Use this as a fallback when specific helper tools do not work, or when you need to query any
+    SAP OData service directly. Host will give the Service path and Entity which we need to query 
+    and based on the Query path we need to make API call.
+
+    Args:
+        service_path: Full OData service path (including version if applicable)
+        method: HTTP method (GET, POST, etc.)
+        headers: Optional dictionary of custom headers
+        params: Optional dictionary of query parameters (e.g. {"$top": 10})
+        data: Optional request body for POST/PUT in JSON string format
+
+    Returns:
+        JSON response with API data or sanitized error message.
+    """
     try:
-        base = get_sap_base_url(service_path)
-        url = f"{base}&{urllib.parse.urlencode(params, quote_via=urllib.parse.quote)}" if params else base
-        req = urllib.request.Request(url, data=(data.encode("utf-8") if data else None), method=method.upper())
-        for k, v in {"Accept": "application/json", "Content-Type": "application/json", **(headers or {})}.items():
-            req.add_header(k, v)
-        _auth(req)
-        with urllib.request.urlopen(req, timeout=10, context=ssl_context) as resp:
-            return resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        details = e.read().decode("utf-8") if e.fp else "No error details"
-        return f"Request failed with status {e.code}: {e.reason}\nDetails: {details}"
+        # Build the base URL (host:port/service_path?sap-client=XXX)
+        base_url = get_sap_base_url(service_path)
+        url = build_url_with_params(base_url, params or {})
+        
+        result = make_sap_request(url, method, data, headers, timeout=30)
+        
+        if result["success"]:
+            return json.dumps({
+                "status_code": result["status_code"],
+                "data": result["data"],
+                "url": result["url"]
+            }, indent=2)
+        else:
+            return json.dumps({
+                "error": result["error"],
+                "details": result.get("details", ""),
+                "status_code": result["status_code"],
+                "url": result["url"]
+            }, indent=2)
+
     except Exception as e:
-        return f"Unexpected error: {str(e)}"
+        logger.error(f"Error in Looking_into_SAP: {str(e)}")
+        return json.dumps({
+            "error": f"Unexpected error: {str(e)}",
+            "service_path": service_path
+        }, indent=2)
 
 @mcp.tool()
 def post_to_sap(
-    endpoint: str,
+    service_path: str,
     payload: str,
     content_type: str = "application/json",
     additional_headers: Optional[Dict[str, str]] = None,
 ) -> str:
-    """Dedicated POST to SAP (or any endpoint)."""
-    url = endpoint if endpoint.startswith("http") else f"https://vhcals4hci.dummy.nodomain:44300/sap/opu/odata/sap/{endpoint.lstrip('/')}"
+    """
+    Dedicated tool for making POST calls to SAP systems.
+    
+    Args:
+        service_path: SAP service path (will be constructed with SAP base URL)
+        payload: JSON string or data to send in the POST body
+        content_type: Content type for the request (default: application/json)
+        additional_headers: Additional headers as a dictionary
+        
+    Returns:
+        Response text or error message in JSON format.
+    """
     try:
-        req = urllib.request.Request(url, data=(payload.encode("utf-8") if payload else None), method="POST")
-        req.add_header("Content-Type", content_type)
-        req.add_header("Accept", "application/json")
-        req.add_header("X-Requested-With", "XMLHttpRequest")
-        _auth(req)
+        # Use the configured SAP host instead of hardcoded URL
+        base_url = get_sap_base_url(service_path)
+        
+        headers = {
+            "Content-Type": content_type,
+            "X-Requested-With": "XMLHttpRequest"
+        }
         if additional_headers:
-            for k, v in additional_headers.items():
-                req.add_header(k, v)
-        with urllib.request.urlopen(req, timeout=30, context=ssl_context) as resp:
-            return json.dumps({
-                "status_code": resp.getcode(),
-                "status_message": "Success",
-                "response_data": resp.read().decode("utf-8"),
-                "url": url
-            }, indent=2)
-    except urllib.error.HTTPError as e:
+            headers.update(additional_headers)
+        
+        result = make_sap_request(base_url, "POST", payload, headers, timeout=30)
+        
         return json.dumps({
-            "status_code": e.code,
-            "status_message": f"HTTP Error: {e.reason}",
-            "error_details": (e.read().decode("utf-8") if e.fp else "No error details"),
-            "url": url
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({
-            "status_code": 500,
-            "status_message": "Request Failed",
-            "error_details": str(e),
-            "url": url
+            "status_code": result["status_code"],
+            "success": result["success"],
+            "data": result.get("data"),
+            "error": result.get("error"),
+            "details": result.get("details"),
+            "url": result["url"]
         }, indent=2)
 
-# ---------- Resources & Prompts ----------
+    except Exception as e:
+        logger.error(f"Error in post_to_sap: {str(e)}")
+        return json.dumps({
+            "status_code": 500,
+            "success": False,
+            "error": f"Unexpected error: {str(e)}",
+            "service_path": service_path
+        }, indent=2)
+
+# ---------- RESOURCES ----------
+
+@mcp.resource("sap://config")
+def get_sap_config() -> str:
+    """Get current SAP configuration (without sensitive data)"""
+    return json.dumps({
+        "sap_host": SAP_HOST,
+        "sap_port": SAP_PORT,
+        "sap_client": SAP_CLIENT,
+        "available_services": list(SAP_SERVICES.keys()),
+        "ssl_verification": "enabled" if os.getenv("ENVIRONMENT", "production").lower() != "development" else "disabled"
+    }, indent=2)
+
+@mcp.resource("sap://services")
+def get_sap_services() -> str:
+    """Get available SAP services and their paths"""
+    return json.dumps({
+        "services": {
+            name: {
+                "path": path,
+                "full_url": get_sap_base_url(path),
+                "description": f"SAP {name.replace('_', ' ').title()} Service"
+            }
+            for name, path in SAP_SERVICES.items()
+        }
+    }, indent=2)
+
+@mcp.resource("sap://service/{service_name}/metadata")
+def get_service_metadata(service_name: str) -> str:
+    """Get metadata for a specific SAP service"""
+    if service_name not in SAP_SERVICES:
+        return json.dumps({
+            "error": f"Service '{service_name}' not found",
+            "available_services": list(SAP_SERVICES.keys())
+        }, indent=2)
+    
+    service_path = SAP_SERVICES[service_name]
+    metadata_url = get_sap_base_url(service_path) + "/$metadata"
+    
+    return json.dumps({
+        "service_name": service_name,
+        "service_path": service_path,
+        "metadata_url": metadata_url,
+        "description": f"Metadata for SAP {service_name.replace('_', ' ').title()} Service"
+    }, indent=2)
+
 @mcp.resource("greeting://{name}")
 def get_greeting(name: str) -> str:
-    return f"Hello, {name}!"
+    """Get a personalized greeting"""
+    return f"Hello, {name}! Welcome to the MotiveMinds SAP MCP Server."
+
+# ---------- PROMPTS ----------
+
+@mcp.prompt()
+def search_customer_prompt(customer_name: str, exact_match: bool = False) -> str:
+    """
+    Generate a prompt for searching customers in SAP.
+    
+    Args:
+        customer_name: Name of the customer to search for
+        exact_match: Whether to perform exact match search
+    """
+    return f"""You are helping to search for customers in the SAP system. 
+
+Use the search_CustomerBy_CustomerDescription tool with these parameters:
+- description: "{customer_name}"
+- exact_match: {exact_match}
+- search_field: "CustomerName"
+
+This will search the SAP Business Partner API for customers matching the given name. 
+The tool will return customer details including Customer ID, Customer Name, and Full Name.
+
+If no results are found, try:
+1. Using exact_match: false for broader search
+2. Searching in different fields like "CustomerFullName"
+3. Using partial names or different spelling variations
+"""
+
+@mcp.prompt()
+def search_product_prompt(product_description: str, language: str = "EN") -> str:
+    """
+    Generate a prompt for searching products in SAP.
+    
+    Args:
+        product_description: Description of the product to search for
+        language: Language code for product descriptions
+    """
+    return f"""You are helping to search for products in the SAP system.
+
+Use the search_ProductBy_Description tool with these parameters:
+- description: "{product_description}"
+- language: "{language}"
+- exact_match: false (for broader search)
+
+This will search the SAP Product API for products matching the given description.
+The tool will return product details including Product ID, Product Description, and Language.
+
+If you need to look up a specific product by its ID, use:
+- product: "PRODUCT_ID" (instead of description)
+- language: "{language}"
+
+For better results, try:
+1. Using key terms from the product description
+2. Different language codes if available
+3. Exact match for precise searches
+"""
+
+@mcp.prompt()
+def material_stock_prompt(material: str, plant: Optional[str] = None) -> str:
+    """
+    Generate a prompt for checking material stock in SAP.
+    
+    Args:
+        material: Material number to check
+        plant: Optional plant to filter by
+    """
+    return f"""You are helping to check material stock in the SAP system.
+
+Use the get_Material_Stock tool with these parameters:
+- material: "{material}"
+{f'- plant: "{plant}"' if plant else ''}
+
+This will query the SAP Material Stock API for inventory information.
+The tool will return stock details including quantities, storage locations, and units.
+
+For comprehensive stock analysis:
+1. Check stock across all plants if no plant is specified
+2. Review different storage locations within plants
+3. Consider batch information and supplier details
+4. Check material base units for proper quantity interpretation
+"""
 
 @mcp.prompt()
 def greet_user(name: str, style: str = "friendly") -> str:
+    """Generate a greeting prompt"""
     styles = {
         "friendly": "Please write a warm, friendly greeting",
         "formal": "Please write a formal, professional greeting",
         "casual": "Please write a casual, relaxed greeting",
     }
-    return f"{styles.get(style, styles['friendly'])} for someone named {name}."
+    return f"{styles.get(style, styles['friendly'])} for someone named {name} who is using the MotiveMinds SAP MCP Server."
 
-# ---------- ASGI entrypoint (Streamable HTTP on /mcp) ----------
-# Using streamable_http_app() for Microsoft Copilot Studio compatibility
-logger.info("Attempting to create Streamable HTTP ASGI application for Copilot Studio...")
-app = mcp.streamable_http_app()   # mounted at /mcp by default
-logger.info("Streamable HTTP ASGI application created. MCP Server ready for Microsoft Copilot Studio integration")
+@mcp.prompt()
+def sap_integration_workflow(task_description: str) -> str:
+    """
+    Generate a comprehensive workflow prompt for SAP integration tasks.
+    
+    Args:
+        task_description: Description of the SAP integration task
+    """
+    return f"""You are an SAP integration specialist helping with: {task_description}
 
+Available SAP Tools:
+1. search_CustomerBy_CustomerDescription - Find customers by name/description
+2. search_ProductBy_Description - Find products by description or lookup by ID
+3. get_Material_Stock - Check material inventory and stock levels
+4. Looking_into_SAP - Make custom OData queries to any SAP service
+5. post_to_sap - Send data to SAP services
+
+Available Resources:
+1. sap://config - Current SAP system configuration
+2. sap://services - Available SAP services and endpoints
+3. sap://service/{{service_name}}/metadata - Service-specific metadata
+
+Workflow Steps:
+1. First, check the SAP configuration using the sap://config resource
+2. Review available services using the sap://services resource
+3. Use appropriate search tools to find relevant data
+4. If needed, use Looking_into_SAP for custom queries
+5. Use post_to_sap for data updates or creation
+
+Best Practices:
+- Always validate data before posting to SAP
+- Use exact_match: false for initial searches, then refine
+- Check service metadata for available fields and operations
+- Handle errors gracefully and provide meaningful feedback
+- Consider plant and storage location filters for stock queries
+
+Start by understanding the current SAP configuration and available services.
+"""
+
+# ---------- SERVER STARTUP ----------
 if __name__ == "__main__":
-    import uvicorn
-    logger.info("Initiating Uvicorn server startup for MotiveMinds MCP Server on http://0.0.0.0:8000/mcp ...")
-    logger.info("Server configured for Microsoft Copilot Studio Streamable HTTP transport")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="debug") # Changed to DEBUG for more verbose logging
-
-# # --- Entry point ---
-# if __name__ == "__main__":
-#     logger.info("Starting Motiveminds MCP Server (SSE) ...")
-#     mcp.run("sse")   # <-- Correct way (no host/port here)
+    logger.info("Starting MotiveMinds MCP Server with Streamable HTTP...")
+    logger.info("Server configured with FastMCP 2.0")
+    logger.info("Server will be available at: http://localhost:8000/mcp/")
+    mcp.run(transport="http", host="0.0.0.0", port=8000)
