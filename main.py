@@ -976,5 +976,5 @@ if __name__ == "__main__":
     logger.info("Starting MotiveMinds MCP Server with Streamable HTTP...")
     logger.info("Server configured with FastMCP 2.0")
     logger.info("Server will be available at: http://localhost:8000/mcp/")
-    mcp.run(transport="http", transport_kwargs={"host": "0.0.0.0", "port": 8000})
+    mcp.run(transport="http", host="0.0.0.0", port=8000)
     
