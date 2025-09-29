@@ -53,8 +53,8 @@ else:
 
 # ---------- MCP Server ----------
 # Get port from environment (Render sets PORT automatically)
-port = int(os.getenv("PORT", 8000))
-host = os.getenv("HOST", "0.0.0.0")
+port = int(os.getenv("PORT", 10000))  # Render default is 10000
+host = "0.0.0.0"  # Required for Render - must bind to 0.0.0.0
 
 # Create FastMCP server with stateless HTTP for deployment
 mcp = FastMCP("MotivemindsMCPServer", stateless_http=True)
@@ -1006,5 +1006,6 @@ Start by understanding the current SAP configuration and available services.
 if __name__ == "__main__":
     logger.info("Starting MotiveMinds MCP Server with Streamable HTTP...")
     logger.info("Server configured with FastMCP 2.0")
-    logger.info("Server will be available at: http://localhost:8000/mcp/")
-    mcp.run(transport="http", port=port)
+    logger.info(f"Server will be available at: http://{host}:{port}/mcp/")
+    logger.info(f"Binding to host: {host}, port: {port}")
+    mcp.run(transport="http", host=host, port=port)
