@@ -93,6 +93,10 @@ def get_access_token() -> str:
     if not all([token_url, client_id, client_secret]):
         raise Exception("Missing environment variables: SAP_BPA_TOKEN_URL, SAP_BPA_CLIENT_ID, SAP_BPA_CLIENT_SECRET")
     
+    # Ensure token_url is a string before passing to Request
+    if token_url is None:
+        raise ValueError("token_url cannot be None at this point.")
+
     # Prepare auth data
     auth_data = f"grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}"
     auth_data_bytes = auth_data.encode('utf-8')
@@ -1003,4 +1007,4 @@ if __name__ == "__main__":
     logger.info("Starting MotiveMinds MCP Server with Streamable HTTP...")
     logger.info("Server configured with FastMCP 2.0")
     logger.info("Server will be available at: http://localhost:8000/mcp/")
-    mcp.run(transport="http", host="0.0.0.0", port=8000)
+    mcp.run(transport="http", port=port)
