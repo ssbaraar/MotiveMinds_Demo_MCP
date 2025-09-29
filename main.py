@@ -233,36 +233,36 @@ def sap_bpa_get_task_instance_context(
     except Exception as e:
         return f"Error getting process instance context: {str(e)}"
 
-@mcp.tool()
-def sap_bpa_debug_api_response(
-    endpoint: str,
-) -> str:
-    """
-    Debug tool to see raw API response format from SAP BPA
+# @mcp.tool()
+# def sap_bpa_debug_api_response(
+#     endpoint: str,
+# ) -> str:
+#     """
+#     Debug tool to see raw API response format from SAP BPA
     
-    Args:
-        endpoint: API endpoint to test (e.g., 'v1/workflow-definitions')
+#     Args:
+#         endpoint: API endpoint to test (e.g., 'v1/workflow-definitions')
     
-    This tool helps troubleshoot API response formats by showing the raw JSON structure.
-    """
-    try:
-        if not endpoint:
-            return "Error: endpoint is required"
+#     This tool helps troubleshoot API response formats by showing the raw JSON structure.
+#     """
+#     try:
+#         if not endpoint:
+#             return "Error: endpoint is required"
         
-        result = make_bpa_request(endpoint, "GET")
+#         result = make_bpa_request(endpoint, "GET")
         
-        response = {
-            "mode": "debug_api_response",
-            "endpoint": endpoint,
-            "response_type": type(result).__name__,
-            "response_keys": list(result.keys()) if isinstance(result, dict) else "N/A (not a dict)",
-            "raw_response": result
-        }
+#         response = {
+#             "mode": "debug_api_response",
+#             "endpoint": endpoint,
+#             "response_type": type(result).__name__,
+#             "response_keys": list(result.keys()) if isinstance(result, dict) else "N/A (not a dict)",
+#             "raw_response": result
+#         }
         
-        return json.dumps(response, indent=2)
+#         return json.dumps(response, indent=2)
         
-    except Exception as e:
-        return f"Error making API call: {str(e)}"
+#     except Exception as e:
+#         return f"Error making API call: {str(e)}"
 
 def get_sap_base_url(service_path: str) -> str:
     """
@@ -637,86 +637,86 @@ def search_ProductBy_Description(
             "product_key": product or ""
         }, indent=2)
 
-@mcp.tool()
-def get_Material_Stock(
-    material: str,
-    plant: Optional[str] = None,
-    storage_location: Optional[str] = None,
-    max_results: int = 10,
-    base_url: Optional[str] = None,
-) -> str:
-    """
-    Get stock details for a given material using SAP Material Stock API.
+# @mcp.tool()
+# def get_Material_Stock(
+#     material: str,
+#     plant: Optional[str] = None,
+#     storage_location: Optional[str] = None,
+#     max_results: int = 10,
+#     base_url: Optional[str] = None,
+# ) -> str:
+#     """
+#     Get stock details for a given material using SAP Material Stock API.
 
-    Args:
-        material: The material number to check stock for
-        plant: Optional plant ID to filter
-        storage_location: Optional storage location to filter
-        max_results: Maximum number of results to return
-        base_url: Override the default SAP OData base URL if needed
+#     Args:
+#         material: The material number to check stock for
+#         plant: Optional plant ID to filter
+#         storage_location: Optional storage location to filter
+#         max_results: Maximum number of results to return
+#         base_url: Override the default SAP OData base URL if needed
 
-    Returns:
-        JSON response with stock data or error message.
-    """
-    try:
-        # Use default service if base_url not provided
-        if not base_url:
-            service_path = SAP_SERVICES["material_stock"]
-            base_url = get_sap_base_url(service_path)
+#     Returns:
+#         JSON response with stock data or error message.
+#     """
+#     try:
+#         # Use default service if base_url not provided
+#         if not base_url:
+#             service_path = SAP_SERVICES["material_stock"]
+#             base_url = get_sap_base_url(service_path)
 
-        # Build OData filter with proper escaping
-        escaped_material = escape_odata_string(material)
-        filters = [f"Material eq '{escaped_material}'"]
+#         # Build OData filter with proper escaping
+#         escaped_material = escape_odata_string(material)
+#         filters = [f"Material eq '{escaped_material}'"]
         
-        if plant:
-            escaped_plant = escape_odata_string(plant)
-            filters.append(f"Plant eq '{escaped_plant}'")
-        if storage_location:
-            escaped_location = escape_odata_string(storage_location)
-            filters.append(f"StorageLocation eq '{escaped_location}'")
+#         if plant:
+#             escaped_plant = escape_odata_string(plant)
+#             filters.append(f"Plant eq '{escaped_plant}'")
+#         if storage_location:
+#             escaped_location = escape_odata_string(storage_location)
+#             filters.append(f"StorageLocation eq '{escaped_location}'")
 
-        filter_query = " and ".join(filters)
+#         filter_query = " and ".join(filters)
 
-        query_params = {
-            "$filter": filter_query,
-            "$select": "Material,Plant,StorageLocation,MaterialBaseUnit,InventoryStockType,Batch,Supplier",
-            "$top": max_results
-        }
+#         query_params = {
+#             "$filter": filter_query,
+#             "$select": "Material,Plant,StorageLocation,MaterialBaseUnit,InventoryStockType,Batch,Supplier",
+#             "$top": max_results
+#         }
 
-        url = build_url_with_params(base_url, query_params)
-        result = make_sap_request(url)
+#         url = build_url_with_params(base_url, query_params)
+#         result = make_sap_request(url)
         
-        if not result["success"]:
-            return json.dumps({
-                "error": result["error"],
-                "details": result.get("details", ""),
-                "status_code": result["status_code"]
-            }, indent=2)
+#         if not result["success"]:
+#             return json.dumps({
+#                 "error": result["error"],
+#                 "details": result.get("details", ""),
+#                 "status_code": result["status_code"]
+#             }, indent=2)
         
-        data = result["data"]
-        if "d" in data and "results" in data["d"]:
-            stocks = data["d"]["results"]
-            response = {
-                "material": material,
-                "plant": plant,
-                "storage_location": storage_location,
-                "found_records": len(stocks),
-                "stocks": stocks
-            }
-            return json.dumps(response, indent=2)
-        else:
-            return json.dumps({
-                "message": f"No stock found for Material '{material}'",
-                "material": material,
-                "found_records": 0
-            }, indent=2)
+#         data = result["data"]
+#         if "d" in data and "results" in data["d"]:
+#             stocks = data["d"]["results"]
+#             response = {
+#                 "material": material,
+#                 "plant": plant,
+#                 "storage_location": storage_location,
+#                 "found_records": len(stocks),
+#                 "stocks": stocks
+#             }
+#             return json.dumps(response, indent=2)
+#         else:
+#             return json.dumps({
+#                 "message": f"No stock found for Material '{material}'",
+#                 "material": material,
+#                 "found_records": 0
+#             }, indent=2)
 
-    except Exception as e:
-        logger.error(f"Error in get_Material_Stock: {str(e)}")
-        return json.dumps({
-            "error": f"Unexpected error: {str(e)}",
-            "material": material
-        }, indent=2)
+#     except Exception as e:
+#         logger.error(f"Error in get_Material_Stock: {str(e)}")
+#         return json.dumps({
+#             "error": f"Unexpected error: {str(e)}",
+#             "material": material
+#         }, indent=2)
 
 @mcp.tool()
 def Looking_into_SAP(
@@ -771,55 +771,55 @@ def Looking_into_SAP(
             "service_path": service_path
         }, indent=2)
 
-@mcp.tool()
-def post_to_sap(
-    service_path: str,
-    payload: str,
-    content_type: str = "application/json",
-    additional_headers: Optional[Dict[str, str]] = None,
-) -> str:
-    """
-    Dedicated tool for making POST calls to SAP systems.
+# @mcp.tool()
+# def post_to_sap(
+#     service_path: str,
+#     payload: str,
+#     content_type: str = "application/json",
+#     additional_headers: Optional[Dict[str, str]] = None,
+# ) -> str:
+#     """
+#     Dedicated tool for making POST calls to SAP systems.
     
-    Args:
-        service_path: SAP service path (will be constructed with SAP base URL)
-        payload: JSON string or data to send in the POST body
-        content_type: Content type for the request (default: application/json)
-        additional_headers: Additional headers as a dictionary
+#     Args:
+#         service_path: SAP service path (will be constructed with SAP base URL)
+#         payload: JSON string or data to send in the POST body
+#         content_type: Content type for the request (default: application/json)
+#         additional_headers: Additional headers as a dictionary
         
-    Returns:
-        Response text or error message in JSON format.
-    """
-    try:
-        # Use the configured SAP host instead of hardcoded URL
-        base_url = get_sap_base_url(service_path)
+#     Returns:
+#         Response text or error message in JSON format.
+#     """
+#     try:
+#         # Use the configured SAP host instead of hardcoded URL
+#         base_url = get_sap_base_url(service_path)
         
-        headers = {
-            "Content-Type": content_type,
-            "X-Requested-With": "XMLHttpRequest"
-        }
-        if additional_headers:
-            headers.update(additional_headers)
+#         headers = {
+#             "Content-Type": content_type,
+#             "X-Requested-With": "XMLHttpRequest"
+#         }
+#         if additional_headers:
+#             headers.update(additional_headers)
         
-        result = make_sap_request(base_url, "POST", payload, headers, timeout=30)
+#         result = make_sap_request(base_url, "POST", payload, headers, timeout=30)
         
-        return json.dumps({
-            "status_code": result["status_code"],
-            "success": result["success"],
-            "data": result.get("data"),
-            "error": result.get("error"),
-            "details": result.get("details"),
-            "url": result["url"]
-        }, indent=2)
+#         return json.dumps({
+#             "status_code": result["status_code"],
+#             "success": result["success"],
+#             "data": result.get("data"),
+#             "error": result.get("error"),
+#             "details": result.get("details"),
+#             "url": result["url"]
+#         }, indent=2)
 
-    except Exception as e:
-        logger.error(f"Error in post_to_sap: {str(e)}")
-        return json.dumps({
-            "status_code": 500,
-            "success": False,
-            "error": f"Unexpected error: {str(e)}",
-            "service_path": service_path
-        }, indent=2)
+#     except Exception as e:
+#         logger.error(f"Error in post_to_sap: {str(e)}")
+#         return json.dumps({
+#             "status_code": 500,
+#             "success": False,
+#             "error": f"Unexpected error: {str(e)}",
+#             "service_path": service_path
+#         }, indent=2)
 
 # ---------- RESOURCES ----------
 
