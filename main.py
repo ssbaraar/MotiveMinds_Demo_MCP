@@ -823,7 +823,12 @@ def Looking_into_SAP(
 
 # ---------- RESOURCES ----------
 
-@mcp.resource("sap://config")
+@mcp.resource(
+    uri="sap://config",
+    name="SAP System Configuration",
+    description="Current SAP system configuration and connection details",
+    mime_type="application/json"
+)
 def get_sap_config() -> str:
     """Get current SAP configuration (without sensitive data)"""
     return json.dumps({
@@ -831,10 +836,16 @@ def get_sap_config() -> str:
         "sap_port": SAP_PORT,
         "sap_client": SAP_CLIENT,
         "available_services": list(SAP_SERVICES.keys()),
-        "ssl_verification": "enabled" if os.getenv("ENVIRONMENT", "production").lower() != "development" else "disabled"
+        "ssl_verification": "enabled" if os.getenv("ENVIRONMENT", "production").lower() != "development" else "disabled",
+        "environment": os.getenv("ENVIRONMENT", "production")
     }, indent=2)
 
-@mcp.resource("sap://services")
+@mcp.resource(
+    uri="sap://services",
+    name="Available SAP Services",
+    description="List of all available SAP OData services with endpoints and descriptions",
+    mime_type="application/json"
+)
 def get_sap_services() -> str:
     """Get available SAP services and their paths"""
     return json.dumps({
@@ -842,13 +853,20 @@ def get_sap_services() -> str:
             name: {
                 "path": path,
                 "full_url": get_sap_base_url(path),
-                "description": f"SAP {name.replace('_', ' ').title()} Service"
+                "description": f"SAP {name.replace('_', ' ').title()} Service",
+                "odata_version": "v4" if "/odata4/" in path else "v2"
             }
             for name, path in SAP_SERVICES.items()
-        }
+        },
+        "total_services": len(SAP_SERVICES)
     }, indent=2)
 
-@mcp.resource("sap://service/{service_name}/metadata")
+@mcp.resource(
+    uri="sap://service/{service_name}/metadata",
+    name="Service Metadata",
+    description="Metadata information for a specific SAP service including endpoint and schema details",
+    mime_type="application/json"
+)
 def get_service_metadata(service_name: str) -> str:
     """Get metadata for a specific SAP service"""
     if service_name not in SAP_SERVICES:
@@ -864,13 +882,56 @@ def get_service_metadata(service_name: str) -> str:
         "service_name": service_name,
         "service_path": service_path,
         "metadata_url": metadata_url,
+        "odata_version": "v4" if "/odata4/" in service_path else "v2",
         "description": f"Metadata for SAP {service_name.replace('_', ' ').title()} Service"
     }, indent=2)
 
-@mcp.resource("greeting://{name}")
-def get_greeting(name: str) -> str:
-    """Get a personalized greeting"""
-    return f"Hello, {name}! Welcome to the MotiveMinds SAP MCP Server."
+@mcp.resource(
+    uri="sap://bpa/config",
+    name="SAP BPA Configuration",
+    description="SAP Build Process Automation configuration and endpoint information",
+    mime_type="application/json"
+)
+def get_bpa_config() -> str:
+    """Get SAP BPA configuration (without sensitive credentials)"""
+    bpa_base_url = os.getenv('SAP_BPA_BASE_URL')
+    return json.dumps({
+        "bpa_base_url": bpa_base_url if bpa_base_url else "Not configured",
+        "token_configured": bool(os.getenv('SAP_BPA_TOKEN_URL')),
+        "available_endpoints": [
+            "/v1/task-instances",
+            "/v1/task-instances/{id}/context",
+            "/v1/workflow-definitions"
+        ],
+        "description": "SAP Build Process Automation API endpoints"
+    }, indent=2)
+
+@mcp.resource(
+    uri="sap://capabilities",
+    name="MCP Server Capabilities",
+    description="Overview of available tools, resources, and capabilities of this MCP server",
+    mime_type="application/json"
+)
+def get_server_capabilities() -> str:
+    """Get overview of server capabilities"""
+    return json.dumps({
+        "tools": {
+            "customer_search": "Search customers by name or description",
+            "product_search": "Search products by description or ID",
+            "bpa_tasks": "Get user task instances from SAP BPA",
+            "bpa_context": "Get task instance context and variables",
+            "generic_odata": "Make custom OData queries to any SAP service"
+        },
+        "resources": {
+            "sap://config": "SAP system configuration",
+            "sap://services": "Available SAP services",
+            "sap://service/{name}/metadata": "Service-specific metadata",
+            "sap://bpa/config": "SAP BPA configuration",
+            "sap://capabilities": "Server capabilities overview"
+        },
+        "supported_odata_versions": ["v2", "v4"],
+        "authentication": "Basic Auth for SAP, OAuth2 for BPA"
+    }, indent=2)
 
 # ---------- PROMPTS ----------
 
