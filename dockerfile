@@ -17,10 +17,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock* ./
 
 # Install dependencies using uv
-RUN uv sync --frozen
+RUN pip install -r requirements.txt
 
 COPY . /app
 
 # Expose port for Render (Render sets $PORT at runtime)
 ENV PORT=8000
-CMD ["uv", "run", "main.py"]
+CMD ["python3", "main.py"]
